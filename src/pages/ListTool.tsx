@@ -46,6 +46,41 @@ const ListTool = () => {
   const [unavailableDates, setUnavailableDates] = useState<string[]>([]);
   const [showCalendar, setShowCalendar] = useState(false);
   const [calendarMonth, setCalendarMonth] = useState(new Date());
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // Get coordinates from browser geolocation - NO FALLBACK
+  const getCoordinates = (): Promise<{ lat: number; lon: number }> => {
+    return new Promise((resolve, reject) => {
+      if (!navigator.geolocation) {
+        reject(new Error('Geolocation is not supported by your browser'));
+        return;
+      }
+
+      navigator.geolocation.getCurrentPosition(
+        (position) => {
+          const coords = {
+            lat: position.coords.latitude,
+            lon: position.coords.longitude
+          };
+          console.log('📍 Seller location acquired:', coords);
+          resolve(coords);
+        },
+        (error) => {
+          console.error('📍 Geolocation error:', error.code, error.message);
+          if (error.code === error.PERMISSION_DENIED) {
+            reject(new Error('Please enable location to list your tool'));
+          } else if (error.code === error.POSITION_UNAVAILABLE) {
+            reject(new Error('Location information unavailable'));
+          } else if (error.code === error.TIMEOUT) {
+            reject(new Error('Location request timed out'));
+          } else {
+            reject(new Error('Failed to get your location'));
+          }
+        },
+        { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+      );
+    });
+  };
 
   useEffect(() => {
     if (!isLoading && !currentUser) {
@@ -208,7 +243,7 @@ const ListTool = () => {
     );
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
     if (!validateForm()) {
@@ -216,15 +251,82 @@ const ListTool = () => {
       return;
     }
 
-    // Mock submission
-    toast({
-      title: "Success",
-      description: "Tool listed successfully! You'll be redirected to your listings.",
-    });
+    setIsSubmitting(true);
 
-    setTimeout(() => {
-      navigate("/my-listings");
-    }, 1500);
+    try {
+      // Get coordinates from browser - NO FALLBACK
+      console.log('📍 Requesting seller location...');
+      const { lat, lon } = await getCoordinates();
+      console.log('📍 Will save tool at location:', { lat, lon });
+
+      // Prepare request body
+      const requestBody = {
+        name: formData.toolName,
+        description: formData.description,
+        price: Number(formData.pricePerDay),
+        deposit: Number(formData.deposit) || 0,
+        lat: lat,
+        lon: lon,
+        sellerId: currentUser?.id || 'demo-user',
+        category: selectedCategory,
+        subcategory: formData.subcategory,
+        usageGuide: formData.usageGuide
+      };
+
+      console.log('📤 Sending to API:', requestBody);
+
+      // Call backend API
+      const response = await fetch('http://localhost:5000/add-tool', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(requestBody)
+      });
+
+      const data = await response.json();
+      console.log('📥 API response:', data);
+
+      if (!response.ok || !data.success) {
+        throw new Error(data.message || 'Failed to list tool');
+      }
+
+      console.log('✅ Tool saved with location:', data.tool?.location);
+
+      // Success - show alert and reset form
+      toast({
+        title: "Success",
+        description: `Tool listed successfully at [${lat.toFixed(4)}, ${lon.toFixed(4)}]`,
+      });
+
+      // Reset form
+      setFormData({
+        toolName: "",
+        description: "",
+        category: "",
+        subcategory: "",
+        pricePerDay: "",
+        deposit: "",
+        location: currentUser?.location || "",
+        usageGuide: "",
+      });
+      setSelectedCategory("");
+      setImages([]);
+      setUnavailableDates([]);
+
+      // Redirect after delay
+      setTimeout(() => {
+        navigate("/my-listings");
+      }, 1500);
+
+    } catch (error) {
+      console.error('❌ Error listing tool:', error);
+      toast({
+        title: "Error",
+        description: error instanceof Error ? error.message : "Failed to list tool. Please try again.",
+        variant: "destructive"
+      });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   const getDaysInMonth = (date: Date) => {
@@ -582,8 +684,18 @@ const ListTool = () => {
             size="lg"
             className="w-full"
             onClick={handleSubmit}
+            disabled={isSubmitting}
           >
-            <Upload className="h-4 w-4 mr-2" /> List Tool
+            {isSubmitting ? (
+              <>
+                <div className="h-4 w-4 mr-2 animate-spin rounded-full border-2 border-white border-t-transparent" />
+                Listing Tool...
+              </>
+            ) : (
+              <>
+                <Upload className="h-4 w-4 mr-2" /> List Tool
+              </>
+            )}
           </Button>
 
           <p className="text-xs text-center text-muted-foreground">
